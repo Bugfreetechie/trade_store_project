@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  trade-store-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: trade-store-api:latest
+    container_name: trade-store-api
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - TRADE_STORE_DB=/app/data/trade_store.db
+      - SCHEDULER_INTERVAL_SECONDS=60
+      - ENABLE_SCHEDULER=True
+    volumes:
+      - trade-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  trade-data:

@@ -1,0 +1,76 @@
+@startuml
+skinparam style strictuml
+skinparam monochrome false
+skinparam sequenceMessageAlign center
+skinparam roundcorner 8
+
+title Trade Transmission & Validation - Sequence Diagram
+
+actor "Client / Transmission Feed" as Client
+boundary "FastAPI API Layer" as API
+control "TradeService" as Service
+entity "TradeValidator" as Validator
+database "TradeRepository\n(SQLite)" as Repo
+actor "Expiry Scheduler\n(Background)" as Scheduler
+
+== Trade Transmission Ingestion ==
+Client -> API : POST /trades (trade_id, version, CP, Portfolio, MaturityDate)
+activate API
+
+API -> Service : process_incoming_trade(trade_in, current_date)
+activate Service
+
+Service -> Repo : get_max_version(trade_id)
+activate Repo
+Repo --> Service : current_max_version (e.g. 2 or null)
+deactivate Repo
+
+Service -> Validator : validate(trade_in, current_max_version, current_date)
+activate Validator
+
+alt Case 1: Maturity Date < Current Date (Validation Rule 2)
+    Validator --> Service : throw PastMaturityDateException
+    Service --> API : throw PastMaturityDateException
+    API --> Client : HTTP 400 Bad Request (Maturity date cannot be earlier than today)
+
+else Case 2: Incoming Version < current_max_version (Validation Rule 1)
+    Validator --> Service : throw LowerVersionException
+    Service --> API : throw LowerVersionException
+    API --> Client : HTTP 400 Bad Request (Incoming version is lower than store version)
+
+else Case 3: Incoming Version == current_max_version (Validation Rule 1 - Replace)
+    Validator --> Service : valid (is_replacement = true)
+    deactivate Validator
+    Service -> Repo : save(TradeRecord) [INSERT ... ON CONFLICT REPLACE]
+    activate Repo
+    Repo --> Service : updated TradeRecord
+    deactivate Repo
+    Service --> API : TradeRecord
+    API --> Client : HTTP 201 Created (Replaced existing version record)
+
+else Case 4: Incoming Version > current_max_version OR New Trade
+    Validator --> Service : valid (is_replacement = false)
+    Service -> Repo : save(TradeRecord) [INSERT]
+    activate Repo
+    Repo --> Service : created TradeRecord
+    deactivate Repo
+    Service --> API : TradeRecord
+    deactivate Service
+    API --> Client : HTTP 201 Created (Trade stored successfully)
+    deactivate API
+end
+
+== Automated Background Expiry (Validation Rule 3) ==
+loop Periodic interval (e.g., every 60s)
+    Scheduler -> Service : process_expired_trades(as_of_date)
+    activate Service
+    Service -> Repo : mark_expired_trades(as_of_date)
+    activate Repo
+    note over Repo: UPDATE trades SET expired = 'Y'\nWHERE maturity_date < as_of_date AND expired != 'Y'
+    Repo --> Service : updated_count
+    deactivate Repo
+    Service --> Scheduler : updated_count
+    deactivate Service
+end
+
+@enduml

@@ -1,0 +1,56 @@
+@startuml
+skinparam style strictuml
+skinparam monochrome false
+skinparam componentStyle uml2
+skinparam roundcorner 8
+
+title Trade Store - Component & Architecture Diagram
+
+node "Trade Store Service Container" {
+    package "Presentation Layer (REST API)" {
+        [FastAPI Application] as API
+        [Exception Handlers] as Handlers
+        [Pydantic Serialization] as Schema
+    }
+
+    package "Domain & Business Logic Layer" {
+        [TradeService] as Service
+        [TradeValidator] as Validator
+        [TradeExpiryScheduler] as Scheduler
+    }
+
+    package "Persistence Layer" {
+        [TradeRepository] as Repo
+        [DatabaseManager] as DBManager
+    }
+
+    database "SQLite Storage\n(trade_store.db)" {
+        [trades Table\nPK: (trade_id, version)] as TradesTable
+        [Index: idx_trades_trade_id] as IdxTrade
+        [Index: idx_trades_maturity] as IdxMaturity
+    }
+}
+
+cloud "External Clients" {
+    [REST Clients / Trading Feeds] as Client
+}
+
+cloud "CI/CD & DevOps Pipeline" {
+    [GitHub Actions / Jenkins] as Pipeline
+    [Regression Test Suite (unittest/pytest)] as Tests
+    [pip-audit & Trivy Scanner] as Scanner
+}
+
+Client --> API : HTTP JSON /trades
+API --> Service : Process trade
+Service --> Validator : Validate version & maturity
+Service --> Repo : Save / Fetch trades
+Scheduler --> Service : Periodic expiry sync
+Repo --> DBManager : SQL statements
+DBManager --> TradesTable : ACID Transactions (WAL mode)
+
+Pipeline --> Tests : Automated verification
+Pipeline --> Scanner : Scan for Critical/Blocker CVEs
+Pipeline ..> API : Deploy Container
+
+@enduml

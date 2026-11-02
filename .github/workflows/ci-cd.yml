@@ -1,0 +1,126 @@
+name: Trade Store CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  lint-and-unit-tests:
+    name: Lint, Test & Coverage
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Code Quality & Linting
+        run: |
+          # Stop build if there are Python syntax errors or undefined names
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          # Exit-zero treats all errors as warnings
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=120 --statistics
+
+      - name: Execute Automated Regression & Unit Tests
+        run: |
+          python run_tests.py
+
+      - name: Run Pytest with Coverage
+        run: |
+          pytest --cov=trade_store --cov-report=xml --cov-report=term-missing tests/
+
+      - name: Upload Test Coverage
+        uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.11'
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  oss-vulnerability-scan:
+    name: OSS Security & Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      - name: Install Security Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pip-audit bandit safety
+
+      - name: Run pip-audit (OSS Dependency Vulnerability Scan)
+        run: |
+          echo "Scanning Python dependencies for known CVEs via pip-audit..."
+          # Fail immediately on any critical or high vulnerability in dependencies
+          pip-audit --desc on --strict
+
+      - name: Run Safety Check (Secondary OSS CVE Scan)
+        run: |
+          echo "Scanning dependencies with Safety..."
+          safety check --full-report || true
+
+      - name: Run Bandit (Static Application Security Testing - SAST)
+        run: |
+          echo "Running Bandit SAST code analysis..."
+          # Fail build on Medium/High severity security flaws in application source
+          bandit -r trade_store/ -ll -ii
+
+      - name: Run Trivy Vulnerability Scanner (Filesystem & Dependencies)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '1' # Fails the build on critical/blocker vulnerabilities
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  docker-build:
+    name: Build & Verify Docker Container
+    needs: [lint-and-unit-tests, oss-vulnerability-scan]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: trade-store-api:latest
+
+      - name: Docker Container Smoke Test
+        run: |
+          docker run -d --name trade-store-test -p 8000:8000 -e ENABLE_SCHEDULER=False trade-store-api:latest
+          sleep 5
+          docker logs trade-store-test
+          curl -f http://localhost:8000/health || exit 1
+          docker stop trade-store-test

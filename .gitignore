@@ -1,0 +1,35 @@
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+
+# Testing and coverage
+.coverage
+htmlcov/
+coverage.xml
+.pytest_cache/
+nosetests.xml
+
+# Databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# IDEs and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Artifacts
+artifacts/

@@ -1,0 +1,137 @@
+@startuml
+skinparam style strictuml
+skinparam classAttributeIconSize 0
+skinparam monochrome false
+skinparam roundcorner 8
+
+title Trade Store - Class Diagram
+
+package "trade_store.models" {
+    class TradeBase {
+        + trade_id: str
+        + version: int
+        + counter_party_id: str
+        + portfolio_id: str
+        + maturity_date: date
+        + created_date: date
+        + expired: str
+        + validate_maturity_date(v): date
+        + validate_created_date(v): date
+        + normalize_expired(v): str
+    }
+
+    class TradeCreate {
+    }
+
+    class TradeResponse {
+        + maturity_date_formatted: str
+        + created_date_formatted: str
+        + from_domain(trade: TradeRecord): TradeResponse
+    }
+
+    class TradeRecord {
+        + trade_id: str
+        + version: int
+        + counter_party_id: str
+        + portfolio_id: str
+        + maturity_date: date
+        + created_date: date
+        + expired: str
+        + to_dict(): dict
+    }
+
+    TradeBase <|-- TradeCreate
+    TradeBase <|-- TradeResponse
+}
+
+package "trade_store.exceptions" {
+    class TradeStoreException {
+    }
+    class LowerVersionException {
+        + trade_id: str
+        + incoming_version: int
+        + current_version: int
+    }
+    class PastMaturityDateException {
+        + trade_id: str
+        + maturity_date: str
+        + reference_date: str
+    }
+    class TradeNotFoundException {
+        + trade_id: str
+    }
+
+    TradeStoreException <|-- LowerVersionException
+    TradeStoreException <|-- PastMaturityDateException
+    TradeStoreException <|-- TradeNotFoundException
+}
+
+package "trade_store.validators" {
+    class TradeValidator {
+        - _current_date_provider: callable
+        + get_current_date(): date
+        + validate_maturity_date(trade: TradeBase, current_date: date): void
+        + validate_version(trade: TradeBase, current_max_version: int): bool
+        + validate(trade: TradeBase, current_max_version: int, current_date: date): bool
+    }
+}
+
+package "trade_store.database" {
+    class DatabaseManager {
+        + db_path: str
+        - _local: threading.local
+        + get_connection(): sqlite3.Connection
+        + init_schema(): void
+        + close(): void
+    }
+}
+
+package "trade_store.repository" {
+    class TradeRepository {
+        - db_manager: DatabaseManager
+        + get_max_version(trade_id: str): int
+        + save(trade: TradeRecord): TradeRecord
+        + find_by_id_and_version(trade_id: str, version: int): TradeRecord
+        + find_latest_by_id(trade_id: str): TradeRecord
+        + find_all_versions_by_id(trade_id: str): List[TradeRecord]
+        + find_all(latest_only: bool, expired_filter: str): List[TradeRecord]
+        + mark_expired_trades(as_of_date: date): int
+        + count(): int
+        + clear(): void
+    }
+}
+
+package "trade_store.services" {
+    class TradeService {
+        - repository: TradeRepository
+        - validator: TradeValidator
+        + process_incoming_trade(trade_in: TradeCreate, current_date: date): TradeRecord
+        + process_expired_trades(as_of_date: date): int
+        + get_trade(trade_id: str, version: int): TradeRecord
+        + get_trade_history(trade_id: str): List[TradeRecord]
+        + list_trades(latest_only: bool, expired_filter: str, auto_sync_expiry: bool): List[TradeRecord]
+    }
+}
+
+package "trade_store.scheduler" {
+    class TradeExpiryScheduler {
+        - trade_service: TradeService
+        - interval_seconds: int
+        - _stop_event: Event
+        - _thread: Thread
+        + start(): void
+        + stop(timeout: float): void
+        + is_running(): bool
+        + trigger_now(): int
+    }
+}
+
+TradeValidator ..> LowerVersionException : throws
+TradeValidator ..> PastMaturityDateException : throws
+
+TradeRepository --> DatabaseManager : uses
+TradeService --> TradeRepository : delegates to
+TradeService --> TradeValidator : validates with
+TradeExpiryScheduler --> TradeService : invokes periodically
+
+@enduml
